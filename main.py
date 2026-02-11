@@ -16,13 +16,17 @@ from telegram.ext import (
 
 from button_handlers import inlinehandler
 from database.database import (
-    init_db, close_db, get_user_by_telegram_id, add_to_white_list
+    init_db, close_db, get_user_by_telegram_id, add_to_white_list, delete_user, get_white_list_users,
+    remove_from_white_list
 )
 from config import settings
 from telegram.constants import ParseMode
 from ai_service import ai_assistant
 from datetime import datetime
 from keyboard.keyboard import inlinekeyboard
+# Импортируем RAG компоненты
+from rag_system.rag_system import init_rag_system, get_rag_components, close_rag_system
+
 
 # --- Настройка логирования ---
 logging.basicConfig(
@@ -31,20 +35,25 @@ logging.basicConfig(
     force=True
 )
 logger = logging.getLogger(__name__)
+
 # ================================================================
+
 BOT_TOKEN = settings.BOT_TN
 if not BOT_TOKEN:
     raise ValueError("❌ Переменная BOT_TOKEN не найдена в .env")
+
 # ================================================================
+
 ADMIN_IDS = settings.ADMIN_IDS
+
 # ================================================================
+
 # ID картинки приветствия
 WELCOME_PHOTO_ID = settings.WELCOME_PHOTO_ID
-# ======================== RAG система =================================
-# Импортируем RAG компоненты
-from rag_system.rag_system import init_rag_system, get_rag_components, close_rag_system
+
 # ==================== Обработчики команд и кнопок ===============================
-# 4 ==================== Команда /start ===============================
+# ==================== Команда /start ============================================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"Пользователь {user_id} запустил /start")
@@ -59,39 +68,34 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup = inlinekeyboard.get_auth_keyboard()
         )
     else:
-        await query.message.reply_text(
+        await update.message.reply_text(
             "С возвращением!")
 
-# 5 ==================== Команда /exit ===============================
+# ============================= Команда /exit ===================================
 
 async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /exit"""
     user_id = update.effective_user.id
-    wallet = await get_wallet_by_user_id(user_id)
-
-    if not wallet:
+    registration_check = await get_user_by_telegram_id(user_id)
+    if not registration_check:
         await update.message.reply_text(
             "❌ You are not logged in.",
-            reply_markup=get_auth_keyboard()
+            reply_markup=inlinekeyboard.get_auth_keyboard()
         )
         return
 
     try:
-        success = await delete_wallet_for_user(user_id)
+        success = await delete_user(user_id)
         if success:
             # ОЧИЩАЕМ AI-ИСТОРИЮ ПРИ ВЫХОДЕ
             if 'ai_history' in context.user_data:
                 del context.user_data['ai_history']
 
             await update.message.reply_text(
-                "✅ You have been successfully logged out.\n\n"
-                "🗑️ Your data has been completely removed from the system.\n\n"
-                "🔐 To use the bot again:\n"
-                "1. Get a new authentication code from app.navadao.io\n"
-                "2. Enter it when prompted",
-                reply_markup=get_auth_keyboard()
+                "✅ Ваши данные успешно удалены из системы.\n\n"
+                "🔁 Для повторной регистрации, обратитесь к администратору.\n\n",
+                reply_markup=inlinekeyboard.get_auth_keyboard()
             )
-            context.user_data[AWAITING_REGISTRATION_CODE] = True
         else:
             await update.message.reply_text("❌ Error during logout. Please try again later.")
     except Exception as e:
@@ -100,6 +104,7 @@ async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # 6 ================= Обработчик текстовых сообщений ===============================
+
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text.strip()
@@ -128,7 +133,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await handle_unknown_command(update, context)
         return
 
-# 7 ================ Обработчик AI-сообщений =======================================
+# ======================= Обработчик AI-сообщений ==================================
 
 async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
     """Обработчик AI-сообщений"""
@@ -187,7 +192,6 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             context.user_data['ai_history'] = history
 
         # Отправляем ответ пользователю
-        # Проверяем, есть ли в сообщении саппорт, если да, то отправляем кнопку на саппорт
         await update.message.reply_text(ai_response)
 
     except Exception as e:
@@ -197,7 +201,7 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             "Please use the menu buttons or try again later."
         )
 
-# 17 ======================= Обработчик неизвестных команд ======================
+# ========================= Обработчик неизвестных команд ======================
 
 async def handle_unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик неизвестных команд"""
@@ -209,7 +213,8 @@ async def handle_unknown_command(update: Update, context: ContextTypes.DEFAULT_T
 
 
 # --- Команды от администратора ---
-# 18 ===============================================================================
+# ============================ Команда: /add_wl @username ==================================
+
 async def add_to_wl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Команда: /add_wl @username
@@ -277,6 +282,7 @@ async def add_to_wl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
+# ============================ Команда: /remove_wl @username ==================================
 
 async def remove_from_wl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -337,6 +343,7 @@ async def remove_from_wl_command(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode="Markdown"
     )
 
+# ============================ Команда: /show_wl  ==================================
 
 async def show_wl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -386,60 +393,7 @@ async def show_wl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"❌ Ошибка при показе white list: {e}")
         await update.message.reply_text("❌ Произошла ошибка при получении списка.")
 
-
-async def check_wl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Команда: /check_wl @username
-    Проверяет, есть ли пользователь в white list
-    """
-    user_id = update.effective_user.id
-
-    if user_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ У вас нет прав администратора.")
-        return
-
-    if not context.args:
-        await update.message.reply_text(
-            "❌ Использование: `/check_wl @username`",
-            parse_mode="Markdown"
-        )
-        return
-
-    username = context.args[0].strip()
-
-    if not username.startswith('@'):
-        await update.message.reply_text(
-            f"❌ Неверный формат: `{username}`",
-            parse_mode="Markdown"
-        )
-        return
-
-    try:
-        from database.white_list import is_user_in_white_list
-
-        # Извлекаем username без @ для проверки
-        username_clean = username[1:] if username.startswith('@') else username
-
-        # Проверяем наличие
-        is_in_list = await is_user_in_white_list(username)
-
-        if is_in_list:
-            await update.message.reply_text(
-                f"✅ `{username}` **есть** в white list",
-                parse_mode="Markdown"
-            )
-        else:
-            await update.message.reply_text(
-                f"❌ `{username}` **отсутствует** в white list",
-                parse_mode="Markdown"
-            )
-
-        logger.info(f"✅ Админ {user_id} проверил наличие {username} в white list")
-
-    except Exception as e:
-        logger.error(f"❌ Ошибка при проверке white list: {e}")
-        await update.message.reply_text("❌ Произошла ошибка при проверке.")
-
+# ============================ Команда: /wl_help  ==================================
 
 async def wl_help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -465,13 +419,12 @@ async def wl_help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • `/add_wl @ivanov` - добавить одного пользователя
 • `/add_wl @petrov @sidorov` - добавить нескольких
 • `/remove_wl @ivanov` - удалить пользователя
-• `/check_wl @petrov` - проверить наличие
     """
 
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
 
-# 19 ======================= RAG обработчики (только для админов) ====================================
+# ======================= RAG обработчики (только для админов) ====================================
 
 async def handle_document_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -655,7 +608,7 @@ async def handle_rag_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
 
-# 20 ======================= --- Функция запуска ---====================================
+# ======================= --- Функция запуска ---====================================
 
 
 async def main_async():
@@ -700,7 +653,6 @@ async def main_async():
     application.add_handler(CommandHandler("add_wl", add_to_wl_command))
     application.add_handler(CommandHandler("remove_wl", remove_from_wl_command))
     application.add_handler(CommandHandler("show_wl", show_wl_command))
-    application.add_handler(CommandHandler("check_wl", check_wl_command))
     application.add_handler(CommandHandler("wl_help", wl_help_command))
 
     # Обработчики RAG для админов (загрузка документов)
@@ -748,7 +700,7 @@ async def main_async():
             logger.info("✅ Bot stopped successfully")
 
 if __name__ == "__main__":
-    if os.name == 'nt':  # Для Windows
+    if os.name == 'nt':
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
     asyncio.run(main_async())

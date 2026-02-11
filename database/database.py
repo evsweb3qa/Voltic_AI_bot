@@ -149,7 +149,7 @@ async def check_white_list(conn: asyncpg.Connection, username: str) -> bool:
 async def get_white_list_users(conn) -> List[str]:
     """Получить список всех username в white list"""
     rows = await conn.fetch("""
-        SELECT user_name FROM user_white_list ORDER BY added_at DESC
+        SELECT user_name FROM user_white_list
     """)
 
     return [f"@{row['user_name']}" for row in rows]
